@@ -18,20 +18,65 @@ on:
       ndk:
         description: Android NDK version
         default: r28c
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      mesa_repo:
+        type: string
+        default: https://gitlab.freedesktop.org/mesa/mesa.git
+      mesa_ref:
+        type: string
+        default: main
+      patches:
+        type: string
+        default: ""
+      variant_name:
+        type: string
+        default: turnip-ci
+      ndk:
+        type: string
+        default: r28c
+      use_checkout:
+        description: Build the calling repository's checked-out commit instead of cloning mesa_repo/mesa_ref
+        type: boolean
+        default: false
+      artifact_name:
+        description: Artifact name; defaults to the zip file name
+        type: string
+        default: ""
+      turnip_ci_ref:
+        description: turnip-ci ref whose build.sh is used when called from another repository
+        type: string
+        default: main
+    secrets:
+      turnip_ci_token:
+        description: Token that can read GameNative/turnip-ci, needed when the caller's GITHUB_TOKEN cannot
+        required: false
+    outputs:
+      zip_name:
+        value: ${{ jobs.build.outputs.zip_name }}
+      artifact_name:
+        value: ${{ jobs.build.outputs.artifact_name }}
+      mesa_version:
+        value: ${{ jobs.build.outputs.mesa_version }}
+      mesa_commit:
+        value: ${{ jobs.build.outputs.mesa_commit }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      zip_name: ${{ steps.build.outputs.zip_name }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      mesa_version: ${{ steps.build.outputs.mesa_version }}
+      mesa_commit: ${{ steps.build.outputs.mesa_commit }}
     env:
-      MESA_REPO: ${{ inputs.mesa_repo || 'https://gitlab.freedesktop.org/mesa/mesa.git' }}
-      MESA_REF: ${{ inputs.mesa_ref || 'main' }}
+      MESA_REPO: ${{ inputs.use_checkout && format('{0}/{1}', github.server_url, github.repository) || inputs.mesa_repo || 'https://gitlab.freedesktop.org/mesa/mesa.git' }}
+      MESA_REF: ${{ inputs.use_checkout && (github.head_ref || github.ref_name) || inputs.mesa_ref || 'main' }}
+      MESA_SRC: ${{ inputs.use_checkout && format('{0}/mesa', github.workspace) || '' }}
       PATCHES: ${{ inputs.patches }}
       VARIANT_NAME: ${{ inputs.variant_name || 'turnip-ci' }}
       NDK_VERSION: ${{ inputs.ndk || 'r28c' }}
@@ -39,7 +84,26 @@ jobs:
       WORKDIR: ${{ github.workspace }}/work
       OUT_DIR: ${{ github.workspace }}/out
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout turnip-ci
+        if: github.repository == 'GameNative/turnip-ci'
+        uses: actions/checkout@v4
+        with:
+          path: turnip-ci
+
+      - name: Checkout turnip-ci from caller
+        if: github.repository != 'GameNative/turnip-ci'
+        uses: actions/checkout@v4
+        with:
+          repository: GameNative/turnip-ci
+          ref: ${{ inputs.turnip_ci_ref || 'main' }}
+          token: ${{ secrets.turnip_ci_token || github.token }}
+          path: turnip-ci
+
+      - name: Checkout caller's Mesa tree
+        if: inputs.use_checkout
+        uses: actions/checkout@v4
+        with:
+          path: mesa
 
       - name: Install dependencies
         run: |
@@ -50,20 +114,16 @@ jobs:
 
       - name: Build
         id: build
-        run: ./build.sh
+        run: ./turnip-ci/build.sh
+
+      - name: Artifact name
+        id: artifact
+        env:
+          NAME: ${{ inputs.artifact_name || steps.build.outputs.zip_name }}
+        run: echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build.outputs.zip_name }}
+          name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.build.outputs.zip_path }}
           if-no-files-found: error
-
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" "${{ steps.build.outputs.zip_path }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --notes "Mesa ${{ steps.build.outputs.mesa_version }} (${{ steps.build.outputs.mesa_commit }}) from $MESA_REPO @ $MESA_REF"

@@ -11,7 +11,7 @@ The workflow `.github/workflows/build.yml` is a thin wrapper around `build.sh`. 
 5. Run `meson setup` with the community Turnip options (`-Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl -Dplatforms=android -Dandroid-stub=true -Dplatform-sdk-version=36 ...`), then `ninja`.
 6. Zip `libvulkan_freedreno.so` with a `meta.json`. The `driverVersion` field is `Mesa <VERSION>-<short commit>`.
 
-The zip is uploaded as a workflow artifact. When you push a `v*` tag, the zip is also attached to a GitHub release.
+The zip is uploaded as a workflow artifact. When you push a `v*` tag, `.github/workflows/release.yml` runs the same build and attaches the zip to a GitHub release.
 
 ## Starting a build
 
@@ -55,11 +55,36 @@ A build from Mesa `main` takes approximately 15 to 25 minutes.
 
 ### Releases
 
-When you push a `v*` tag, the workflow builds with the default inputs and attaches the zip to a release with the same name:
+When you push a `v*` tag, `release.yml` builds upstream `main` with the default inputs and attaches the zip to a release with the same name:
 
 ```sh
 git tag v2026.10.06 && git push origin v2026.10.06
 ```
+
+## Calling from another repository
+
+`build.yml` is also a reusable workflow (`workflow_call`). It takes the same inputs and these extra inputs:
+
+- `use_checkout` (boolean): build the caller's commit (the same checkout that `actions/checkout` gives) and do not clone `mesa_repo`/`mesa_ref`. The patches in `patches` are applied on top of that tree.
+- `artifact_name`: the name of the uploaded artifact. The default is the zip file name.
+- `turnip_ci_ref`: the turnip-ci ref whose `build.sh` is used. The default is `main`.
+
+It also takes an optional secret, `turnip_ci_token`. The outputs are `zip_name`, `artifact_name`, `mesa_version` and `mesa_commit`.
+
+```yaml
+jobs:
+  turnip:
+    uses: GameNative/turnip-ci/.github/workflows/build.yml@main
+    with:
+      use_checkout: true
+      variant_name: turnip-pr-${{ github.event.pull_request.number }}
+      artifact_name: turnip-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+```
+
+turnip-ci is private. Before other repositories can call it, you must do the two steps that follow:
+
+1. Set **Settings > Actions > General > Access** in turnip-ci to "Accessible from repositories in the GameNative organization". The calling repository must be private or internal, because GitHub does not let public repositories call workflows in a private repository.
+2. If the caller's `GITHUB_TOKEN` cannot read turnip-ci, give a token that can read it as `secrets.turnip_ci_token`.
 
 ## Adding a patch
 
@@ -67,7 +92,7 @@ Refer to [patches/README.md](patches/README.md). In summary, put `foo.patch` (ma
 
 ## Building locally
 
-`build.sh` runs on Linux (x86_64) and macOS. It uses the same environment variables as the workflow inputs:
+`build.sh` runs on Linux (x86_64). It is also written for macOS, but it has not been tested there. It uses the same environment variables as the workflow inputs:
 
 ```sh
 MESA_REF=main PATCHES="" VARIANT_NAME=turnip-local NDK_VERSION=r28c ./build.sh
@@ -80,7 +105,7 @@ sudo apt-get install ninja-build flex bison glslang-tools pkg-config zip unzip
 pip install --user meson mako pyyaml packaging
 ```
 
-The script keeps the NDK and the Mesa checkout in `work/` and writes the zip to `out/`. You can change these with `WORKDIR` and `OUT_DIR`.
+The script keeps the NDK and the Mesa checkout in `work/` and writes the zip to `out/`. You can change these with `WORKDIR` and `OUT_DIR`. To build a Mesa tree that you already have, set `MESA_SRC=/path/to/mesa`. The script then does not clone, and it applies `PATCHES` directly to that tree.
 
 ## Importing into GameNative
 

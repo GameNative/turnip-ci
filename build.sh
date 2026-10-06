@@ -56,13 +56,19 @@ prepare_ndk() {
 }
 
 fetch_mesa() {
-    MESA_DIR="$WORKDIR/mesa"
-    rm -rf "$MESA_DIR"
-    git init -q "$MESA_DIR"
-    git -C "$MESA_DIR" remote add origin "$MESA_REPO"
-    log "Fetching $MESA_REPO @ $MESA_REF"
-    git -C "$MESA_DIR" fetch -q --depth=1 origin "$MESA_REF"
-    git -C "$MESA_DIR" -c advice.detachedHead=false checkout -q FETCH_HEAD
+    if [ -n "${MESA_SRC:-}" ]; then
+        [ -f "$MESA_SRC/VERSION" ] && [ -f "$MESA_SRC/meson.build" ] || die "MESA_SRC is not a Mesa tree: $MESA_SRC"
+        MESA_DIR="$(cd "$MESA_SRC" && pwd)"
+        log "Using existing Mesa tree $MESA_DIR"
+    else
+        MESA_DIR="$WORKDIR/mesa"
+        rm -rf "$MESA_DIR"
+        git init -q "$MESA_DIR"
+        git -C "$MESA_DIR" remote add origin "$MESA_REPO"
+        log "Fetching $MESA_REPO @ $MESA_REF"
+        git -C "$MESA_DIR" fetch -q --depth=1 origin "$MESA_REF"
+        git -C "$MESA_DIR" -c advice.detachedHead=false checkout -q FETCH_HEAD
+    fi
     MESA_COMMIT="$(git -C "$MESA_DIR" rev-parse --short=10 HEAD)"
     MESA_VERSION="$(tr -d '[:space:]' < "$MESA_DIR/VERSION")"
     log "Mesa $MESA_VERSION ($MESA_COMMIT)"
